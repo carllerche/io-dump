@@ -24,6 +24,7 @@ pub struct Dump {
     lines: Lines<BufReader<File>>,
 }
 
+#[derive(Debug)]
 pub struct Block {
     head: Head,
     data: Vec<u8>,
@@ -35,6 +36,7 @@ pub enum Direction {
     Out,
 }
 
+#[derive(Debug)]
 struct Head {
     direction: Direction,
     elapsed: Duration,
@@ -182,70 +184,76 @@ impl Dump {
     }
 
     fn read_block(&mut self) -> io::Result<Block> {
-        let head = match self.lines.next() {
-            Some(Ok(line)) => line,
-            Some(Err(e)) => return Err(e),
-            None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF")),
-        };
-
-        let head: Vec<String> = head
-            .split(|v| v == ' ')
-            .filter(|v| !v.is_empty())
-            .map(|v| v.into())
-            .collect();
-
-        assert_eq!(4, head.len());
-
-        let dir = match &head[0][..] {
-            "<-" => Direction::In,
-            "->" => Direction::Out,
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid direction format")),
-        };
-
-        let elapsed: f64 = {
-            let s = &head[1];
-            s[..s.len()-1].parse().unwrap()
-        };
-
-        // Do nothing w/ bytes for now
-
-        // ready body
-        let mut data = vec![];
-
         loop {
-            let line = match self.lines.next() {
+            let head = match self.lines.next() {
                 Some(Ok(line)) => line,
                 Some(Err(e)) => return Err(e),
                 None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF")),
             };
 
-            if line.is_empty() {
-                return Ok(Block {
-                    head: Head {
-                        direction: dir,
-                        elapsed: Duration::from_millis((elapsed * 1000.0) as u64),
-                    },
-                    data: data,
-                });
+            let head: Vec<String> = head
+                .split(|v| v == ' ')
+                .filter(|v| !v.is_empty())
+                .map(|v| v.into())
+                .collect();
+
+            if head.len() == 0 || head[0] == "//" {
+                continue;
             }
 
-            let mut pos = 0;
+            assert_eq!(4, head.len());
+
+            let dir = match &head[0][..] {
+                "<-" => Direction::In,
+                "->" => Direction::Out,
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid direction format")),
+            };
+
+            let elapsed: f64 = {
+                let s = &head[1];
+                s[..s.len()-1].parse().unwrap()
+            };
+
+            // Do nothing w/ bytes for now
+
+            // ready body
+            let mut data = vec![];
 
             loop {
-                let c = &line[pos..pos+2];
-
-                if c == "  " {
-                    break;
-                }
-
-                let byte = match u8::from_str_radix(c, 16) {
-                    Ok(byte) => byte,
-                    Err(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "could not parse byte")),
+                let line = match self.lines.next() {
+                    Some(Ok(line)) => line,
+                    Some(Err(e)) => return Err(e),
+                    None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF")),
                 };
 
-                data.push(byte);
+                if line.is_empty() {
+                    return Ok(Block {
+                        head: Head {
+                            direction: dir,
+                            elapsed: Duration::from_millis((elapsed * 1000.0) as u64),
+                        },
+                        data: data,
+                    });
+                }
 
-                pos += 3;
+                let mut pos = 0;
+
+                loop {
+                    let c = &line[pos..pos+2];
+
+                    if c == "  " {
+                        break;
+                    }
+
+                    let byte = match u8::from_str_radix(c, 16) {
+                        Ok(byte) => byte,
+                        Err(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "could not parse byte")),
+                    };
+
+                    data.push(byte);
+
+                    pos += 3;
+                }
             }
         }
     }
