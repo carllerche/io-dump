@@ -183,12 +183,12 @@ impl Dump {
         Ok(Dump { lines: dump.lines() })
     }
 
-    fn read_block(&mut self) -> io::Result<Block> {
+    fn read_block(&mut self) -> io::Result<Option<Block>> {
         loop {
             let head = match self.lines.next() {
                 Some(Ok(line)) => line,
                 Some(Err(e)) => return Err(e),
-                None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF")),
+                None => return Ok(None),
             };
 
             let head: Vec<String> = head
@@ -223,17 +223,17 @@ impl Dump {
                 let line = match self.lines.next() {
                     Some(Ok(line)) => line,
                     Some(Err(e)) => return Err(e),
-                    None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF")),
+                    None => "".into(),
                 };
 
                 if line.is_empty() {
-                    return Ok(Block {
+                    return Ok(Some(Block {
                         head: Head {
                             direction: dir,
                             elapsed: Duration::from_millis((elapsed * 1000.0) as u64),
                         },
                         data: data,
-                    });
+                    }));
                 }
 
                 let mut pos = 0;
@@ -263,7 +263,7 @@ impl Iterator for Dump {
     type Item = Block;
 
     fn next(&mut self) -> Option<Block> {
-        self.read_block().ok()
+        self.read_block().unwrap()
     }
 }
 
