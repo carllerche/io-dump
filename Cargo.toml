@@ -5,7 +5,5 @@ authors = ["Carl Lerche <me@carllerche.com>"]
 
 [dependencies]
 log = "0.3"
-
-# TODO: Make this an optional dependency
 futures = "0.1"
-tokio-core = "0.1"
+tokio-io = "0.1"

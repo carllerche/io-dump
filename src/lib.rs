@@ -1,5 +1,5 @@
 extern crate futures;
-extern crate tokio_core;
+extern crate tokio_io;
 
 #[macro_use]
 extern crate log;
@@ -10,8 +10,8 @@ use std::io::{self, Read, Write, BufRead, BufReader, Lines};
 use std::path::Path;
 use std::time::{Instant, Duration};
 
-use futures::{Async};
-use tokio_core::io::Io;
+use futures::Poll;
+use tokio_io::{AsyncRead, AsyncWrite};
 
 /// Copies all data read from and written to the upstream I/O to a file.
 pub struct IoDump<T> {
@@ -160,13 +160,11 @@ impl<T: Write> Write for IoDump<T> {
     }
 }
 
-impl<T: Io> Io for IoDump<T> {
-    fn poll_read(&mut self) -> Async<()> {
-        self.upstream.poll_read()
-    }
+impl<T: AsyncRead> AsyncRead for IoDump<T> {}
 
-    fn poll_write(&mut self) -> Async<()> {
-        self.upstream.poll_write()
+impl<T: AsyncWrite> AsyncWrite for IoDump<T> {
+    fn shutdown(&mut self) -> Poll<(), io::Error> {
+        self.upstream.shutdown()
     }
 }
 
