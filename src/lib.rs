@@ -1,8 +1,16 @@
-extern crate futures;
-extern crate tokio_io;
+//! Wraps an I/O handle, logging all activity in a readable format to a
+//! configurable destination.
+
+#![deny(warnings, missing_docs, missing_debug_implementations)]
 
 #[macro_use]
 extern crate log;
+
+#[cfg(feature = "tokio")]
+extern crate futures;
+
+#[cfg(feature = "tokio")]
+extern crate tokio_io;
 
 use std::cmp;
 use std::fs::File;
@@ -10,31 +18,40 @@ use std::io::{self, Read, Write, BufRead, BufReader, Lines};
 use std::path::Path;
 use std::time::{Instant, Duration};
 
-use futures::Poll;
-use tokio_io::{AsyncRead, AsyncWrite};
-
-/// Copies all data read from and written to the upstream I/O to a file.
+/// Wraps an I/O handle, logging all activity in a readable format to a
+/// configurable destination.
+///
+/// See [library level documentation](index.html) for more details.
 #[derive(Debug)]
-pub struct IoDump<T, U> {
+pub struct Dump<T, U> {
     upstream: T,
     dump: U,
     now: Instant,
 }
 
-pub struct Dump {
-    lines: Lines<BufReader<File>>,
+/// Read the contents of a dump
+#[derive(Debug)]
+pub struct DumpRead<T> {
+    lines: Lines<BufReader<T>>,
 }
 
+/// Unit of data either read or written.
 #[derive(Debug)]
-pub struct Block {
+pub struct Packet {
     head: Head,
     data: Vec<u8>,
 }
 
+/// Direction in which a packet was transfered.
+///
+/// A packet is either read from an io source or it is written to an I/O handle.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Direction {
-    In,
-    Out,
+    /// Data is read from an I/O handle.
+    Read,
+
+    /// Data is written to an I/O handle.
+    Write,
 }
 
 #[derive(Debug)]
@@ -43,15 +60,19 @@ struct Head {
     elapsed: Duration,
 }
 
-impl Block {
+impl Packet {
+    /// The packet direction. Either `Read` or `Write`.
     pub fn direction(&self) -> Direction {
         self.head.direction
     }
 
+    /// The elapsed duration from the dump creation time to the time the
+    /// instance of the packet's occurance.
     pub fn elapsed(&self) -> Duration {
         self.head.elapsed
     }
 
+    /// The data being transmitted.
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -59,36 +80,41 @@ impl Block {
 
 /*
  *
- * ===== impl IoDump =====
+ * ===== impl Dump =====
  *
  */
 
 const LINE: usize = 25;
 
-impl<T> IoDump<T, File> {
+impl<T> Dump<T, File> {
+    /// Dump `upstream`'s activity to a file located at `path`.
+    ///
+    /// If a file exists at `path`, it will be overwritten.
     pub fn to_file<P: AsRef<Path>>(upstream: T, path: P) -> io::Result<Self> {
         File::create(path)
-            .map(move |dump| IoDump::new(upstream, dump))
+            .map(move |dump| Dump::new(upstream, dump))
     }
 }
 
-impl<T> IoDump<T, io::Stdout> {
+impl<T> Dump<T, io::Stdout> {
+    /// Dump `upstream`'s activity to STDOUT.
     pub fn to_stdout(upstream: T) -> Self {
-        IoDump::new(upstream, io::stdout())
+        Dump::new(upstream, io::stdout())
     }
 }
 
-impl<T, U: Write> IoDump<T, U> {
-    pub fn new(upstream: T, dump: U) -> IoDump<T, U> {
-        IoDump {
+impl<T, U: Write> Dump<T, U> {
+    /// Create a new `Dump` wrapping `upstream` logging activity to `dump`.
+    pub fn new(upstream: T, dump: U) -> Dump<T, U> {
+        Dump {
             upstream: upstream,
             dump: dump,
             now: Instant::now(),
         }
     }
 
-    fn write_block(&mut self, dir: Direction, data: &[u8]) -> io::Result<()> {
-        if dir == Direction::In {
+    fn write_packet(&mut self, dir: Direction, data: &[u8]) -> io::Result<()> {
+        if dir == Direction::Write {
             try!(write!(self.dump, "<-  "));
         } else {
             try!(write!(self.dump, "->  "));
@@ -150,18 +176,18 @@ impl<T, U: Write> IoDump<T, U> {
     }
 }
 
-impl<T: Read, U: Write> Read for IoDump<T, U> {
+impl<T: Read, U: Write> Read for Dump<T, U> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         let n = try!(self.upstream.read(dst));
-        try!(self.write_block(Direction::Out, &dst[0..n]));
+        try!(self.write_packet(Direction::Read, &dst[0..n]));
         Ok(n)
     }
 }
 
-impl<T: Write, U: Write> Write for IoDump<T, U> {
+impl<T: Write, U: Write> Write for Dump<T, U> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
         let n = try!(self.upstream.write(src));
-        try!(self.write_block(Direction::In, &src[0..n]));
+        try!(self.write_packet(Direction::Write, &src[0..n]));
 
         trace!("{:?}", &src[0..n]);
 
@@ -174,28 +200,27 @@ impl<T: Write, U: Write> Write for IoDump<T, U> {
     }
 }
 
-impl<T: AsyncRead, U: Write> AsyncRead for IoDump<T, U> {}
-
-impl<T: AsyncWrite, U: Write> AsyncWrite for IoDump<T, U> {
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.upstream.shutdown()
-    }
-}
-
 /*
  *
- * ===== impl Dump =====
+ * ===== impl DumpRead =====
  *
  */
 
-impl Dump {
-    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Dump> {
+impl DumpRead<File> {
+    /// Open a dump file at the specified location.
+    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let dump = try!(File::open(path));
-        let dump = BufReader::new(dump);
-        Ok(Dump { lines: dump.lines() })
+        Ok(DumpRead::new(dump))
+    }
+}
+
+impl<T: Read> DumpRead<T> {
+    /// Reads dump packets from the specified source.
+    pub fn new(io: T) -> DumpRead<T> {
+        DumpRead { lines: BufReader::new(io).lines() }
     }
 
-    fn read_block(&mut self) -> io::Result<Option<Block>> {
+    fn read_packet(&mut self) -> io::Result<Option<Packet>> {
         loop {
             let head = match self.lines.next() {
                 Some(Ok(line)) => line,
@@ -216,8 +241,8 @@ impl Dump {
             assert_eq!(4, head.len());
 
             let dir = match &head[0][..] {
-                "<-" => Direction::In,
-                "->" => Direction::Out,
+                "<-" => Direction::Write,
+                "->" => Direction::Read,
                 _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid direction format")),
             };
 
@@ -239,7 +264,7 @@ impl Dump {
                 };
 
                 if line.is_empty() {
-                    return Ok(Some(Block {
+                    return Ok(Some(Packet {
                         head: Head {
                             direction: dir,
                             elapsed: Duration::from_millis((elapsed * 1000.0) as u64),
@@ -271,11 +296,11 @@ impl Dump {
     }
 }
 
-impl Iterator for Dump {
-    type Item = Block;
+impl<T: Read> Iterator for DumpRead<T> {
+    type Item = Packet;
 
-    fn next(&mut self) -> Option<Block> {
-        self.read_block().unwrap()
+    fn next(&mut self) -> Option<Packet> {
+        self.read_packet().unwrap()
     }
 }
 
@@ -287,8 +312,26 @@ const MILLIS_PER_SEC: u64 = 1_000;
 ///
 /// The saturating is fine because `u64::MAX` milliseconds are still many
 /// million years.
-pub fn millis(duration: Duration) -> u64 {
+fn millis(duration: Duration) -> u64 {
     // Round up.
     let millis = (duration.subsec_nanos() + NANOS_PER_MILLI - 1) / NANOS_PER_MILLI;
     duration.as_secs().saturating_mul(MILLIS_PER_SEC).saturating_add(millis as u64)
+}
+
+#[cfg(feature = "tokio")]
+mod tokio {
+    use super::Dump;
+
+    use futures::Poll;
+    use tokio_io::{AsyncRead, AsyncWrite};
+
+    use std::io::{self, Write};
+
+    impl<T: AsyncRead, U: Write> AsyncRead for Dump<T, U> {}
+
+    impl<T: AsyncWrite, U: Write> AsyncWrite for Dump<T, U> {
+        fn shutdown(&mut self) -> Poll<(), io::Error> {
+            self.upstream.shutdown()
+        }
+    }
 }
