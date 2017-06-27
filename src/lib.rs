@@ -14,9 +14,10 @@ use futures::Poll;
 use tokio_io::{AsyncRead, AsyncWrite};
 
 /// Copies all data read from and written to the upstream I/O to a file.
-pub struct IoDump<T> {
+#[derive(Debug)]
+pub struct IoDump<T, U> {
     upstream: T,
-    dump: File,
+    dump: U,
     now: Instant,
 }
 
@@ -64,13 +65,26 @@ impl Block {
 
 const LINE: usize = 25;
 
-impl<T> IoDump<T> {
-    pub fn new<P: AsRef<Path>>(upstream: T, path: P) -> io::Result<IoDump<T>> {
-        Ok(IoDump {
+impl<T> IoDump<T, File> {
+    pub fn to_file<P: AsRef<Path>>(upstream: T, path: P) -> io::Result<Self> {
+        File::create(path)
+            .map(move |dump| IoDump::new(upstream, dump))
+    }
+}
+
+impl<T> IoDump<T, io::Stdout> {
+    pub fn to_stdout(upstream: T) -> Self {
+        IoDump::new(upstream, io::stdout())
+    }
+}
+
+impl<T, U: Write> IoDump<T, U> {
+    pub fn new(upstream: T, dump: U) -> IoDump<T, U> {
+        IoDump {
             upstream: upstream,
-            dump: try!(File::create(path)),
+            dump: dump,
             now: Instant::now(),
-        })
+        }
     }
 
     fn write_block(&mut self, dir: Direction, data: &[u8]) -> io::Result<()> {
@@ -136,7 +150,7 @@ impl<T> IoDump<T> {
     }
 }
 
-impl<T: Read> Read for IoDump<T> {
+impl<T: Read, U: Write> Read for IoDump<T, U> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         let n = try!(self.upstream.read(dst));
         try!(self.write_block(Direction::Out, &dst[0..n]));
@@ -144,7 +158,7 @@ impl<T: Read> Read for IoDump<T> {
     }
 }
 
-impl<T: Write> Write for IoDump<T> {
+impl<T: Write, U: Write> Write for IoDump<T, U> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
         let n = try!(self.upstream.write(src));
         try!(self.write_block(Direction::In, &src[0..n]));
@@ -160,9 +174,9 @@ impl<T: Write> Write for IoDump<T> {
     }
 }
 
-impl<T: AsyncRead> AsyncRead for IoDump<T> {}
+impl<T: AsyncRead, U: Write> AsyncRead for IoDump<T, U> {}
 
-impl<T: AsyncWrite> AsyncWrite for IoDump<T> {
+impl<T: AsyncWrite, U: Write> AsyncWrite for IoDump<T, U> {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         self.upstream.shutdown()
     }
