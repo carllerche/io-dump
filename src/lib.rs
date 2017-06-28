@@ -135,9 +135,9 @@ struct Inner<U> {
     now: Instant,
 }
 
-/// Read the contents of a dump
+/// Iterates packets in a dump
 #[derive(Debug)]
-pub struct DumpRead<T> {
+pub struct Packets<T> {
     lines: Lines<BufReader<T>>,
 }
 
@@ -321,22 +321,20 @@ impl<U: Write> Inner<U> {
 
 /*
  *
- * ===== impl DumpRead =====
+ * ===== impl Packets =====
  *
  */
 
-impl DumpRead<File> {
-    /// Open a dump file at the specified location.
-    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let dump = try!(File::open(path));
-        Ok(DumpRead::new(dump))
-    }
+/// Open a dump file at the specified location.
+pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Packets<File>> {
+    let dump = try!(File::open(path));
+    Ok(Packets::new(dump))
 }
 
-impl<T: Read> DumpRead<T> {
+impl<T: Read> Packets<T> {
     /// Reads dump packets from the specified source.
-    pub fn new(io: T) -> DumpRead<T> {
-        DumpRead { lines: BufReader::new(io).lines() }
+    pub fn new(io: T) -> Packets<T> {
+        Packets { lines: BufReader::new(io).lines() }
     }
 
     fn read_packet(&mut self) -> io::Result<Option<Packet>> {
@@ -415,7 +413,7 @@ impl<T: Read> DumpRead<T> {
     }
 }
 
-impl<T: Read> Iterator for DumpRead<T> {
+impl<T: Read> Iterator for Packets<T> {
     type Item = Packet;
 
     fn next(&mut self) -> Option<Packet> {
