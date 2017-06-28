@@ -1,5 +1,109 @@
 //! Wraps an I/O handle, logging all activity in a readable format to a
 //! configurable destination.
+//!
+//! # Overview
+//!
+//! [`Dump`] decorates an I/O handle that implements [`Read`] and/or [`Write`]. [`Dump`]
+//! then passes calls to [`read`] and [`write`] through to the inner I/O handle
+//! while also logging the packets to a configurable destination in readable
+//! format.
+//!
+//! This can be useful for debugging protocols that are encrypted and generating
+//! reproducible test cases.
+//!
+//! In the encrypted case, `Dump` can be be added after the decryption step but
+//! before the application logic step. For example, with SSL, `Dump` would wrap
+//! [`TlsStream`] and the dump can be written to STDOUT.
+//!
+//! For reproducing test cases, a `TcpStream` could be wrapped and the log
+//! written to a file. Then [fixture-io] can load the file and replay the data
+//! exchange. These replayable scenarios can be used as part of unit tests to
+//! help prevent regressions.
+//!
+//! # Usage
+//!
+//! Add the following to your `Cargo.toml`
+//!
+//! ```toml
+//! [dependencies]
+//! io-dump = { git = "github.com/carllerche/io-dump" }
+//! ```
+//!
+//! Then use it in your project. Wrap a stream with `Dump` then use the wrapped
+//! stream as you would have otherwise.
+//!
+//! For example:
+//!
+//! ```no_run
+//! extern crate io_dump;
+//!
+//! # pub fn main() {
+//! use io_dump::Dump;
+//! use std::io::prelude::*;
+//! use std::net::TcpStream;
+//!
+//! let stream = TcpStream::connect("127.0.0.1:34254").unwrap();
+//! let mut stream = Dump::to_stdout(stream);
+//!
+//! let _ = stream.write(&[1]);
+//! let _ = stream.read(&mut [0; 128]); // ignore here too
+//! # }
+//! ```
+//!
+//! **Note** that writing the log output is done using blocking I/O. So, writing
+//! to a file could block the current thread if the disk is not ready. This
+//! could cause delays in non-blocking systems such as Tokio. As such, care
+//! should be taken when using `io-dump` in production systems.
+//!
+//! # File format
+//!
+//! `io-dump` uses a custom file output. Each packet begins with a header line
+//! consisting of:
+//!
+//! * The packet direction (either read or write)
+//! * The timestamp represented as milliseconds elapsed since the dump start.
+//! * The number of bytes in the packet payload.
+//!
+//! The packet direction is represented as `<-` for read and `->` for write.
+//!
+//! After the header line, the packet payload is written in two columns. The
+//! first column is hex encoded and the second column attempts to provide an
+//! ASCII representation.
+//!
+//! New lines between packets and comments (`//` prefixed) are ignored.
+//!
+//! Example:
+//!
+//! ```not_rust,no_wrap
+//! // Client connection preface
+//! <-  0.001s  24 bytes
+//! 50 52 49 20 2A 20 48 54 54 50 2F 32 2E 30     P R I   *   H T T P / 2 . 0
+//! 0D 0A 0D 0A 53 4D 0D 0A 0D 0A                 \r\n\r\n S M\r\n\r\n
+//!
+//! // Settings
+//! <-  0.001s  39 bytes
+//! 00 00 1E 04 00 00 00 00 00 00 01 00 00 10     \0\0\?\?\0\0\0\0\0\0\?\0\0\?
+//! 00 00 02 00 00 00 01 00 03 00 00 00 64 00     \0\0\?\0\0\0\?\0\?\0\0\0 d\0
+//! 04 00 00 FF FF 00 05 00 00 40 00              \?\0\0\?\?\0\?\0\0 @\0
+//!
+//! // Request headers
+//! <-  0.002s  30 bytes
+//! 00 00 15 01 05 00 00 00 01 82 87 01 10 68     \0\0\?\?\?\0\0\0\?\?\?\?\? h
+//! 74 74 70 32 2E 61 6B 61 6D 61 69 2E 63 6F      t t p 2 . a k a m a i . c o
+//! 6D 85                                          m\?
+//!
+//! // Settings frame
+//! ->  0.013s  9 bytes
+//! 00 00 1E 04 00 00 00 00 00                    \0\0\?\?\0\0\0\0\0
+//! ```
+//!
+//! [`Dump`]: struct.Dump.html
+//! [`Read`]: https://doc.rust-lang.org/std/io/trait.Read.html
+//! [`Write`]: https://doc.rust-lang.org/std/io/trait.Write.html
+//! [`read`]: https://doc.rust-lang.org/std/io/trait.Read.html#tymethod.read
+//! [`write`]: https://doc.rust-lang.org/std/io/trait.Write.html#tymethod.write
+//! [fixture-io]: github.com/carllerche/fixture-io
+//! [`TlsStream`]: https://docs.rs/tokio-tls/0.1/tokio_tls/struct.TlsStream.html
 
 #![deny(warnings, missing_docs, missing_debug_implementations)]
 
@@ -164,12 +268,6 @@ impl<T, U: Write> Dump<T, U> {
                 }
                 _ => try!(write!(self.dump, "\\?")),
             }
-
-            /*
-            if i + 1 < line.len() {
-                try!(write!(self.dump, " "));
-            }
-            */
         }
 
         write!(self.dump, "\n")
