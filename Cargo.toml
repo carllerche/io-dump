@@ -15,9 +15,6 @@ configurable destination.
 categories = ["development-tools::testing", "network-programming"]
 
 [dependencies]
-log = "0.3"
-
-# For the tokio feature
 futures = { version = "0.1", optional = true }
 tokio-io = { version = "0.1", optional = true }
 

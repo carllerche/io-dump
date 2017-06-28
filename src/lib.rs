@@ -107,9 +107,6 @@
 
 #![deny(warnings, missing_docs, missing_debug_implementations)]
 
-#[macro_use]
-extern crate log;
-
 #[cfg(feature = "tokio")]
 extern crate futures;
 
@@ -129,6 +126,11 @@ use std::time::{Instant, Duration};
 #[derive(Debug)]
 pub struct Dump<T, U> {
     upstream: T,
+    inner: Option<Inner<U>>,
+}
+
+#[derive(Debug)]
+struct Inner<U> {
     dump: U,
     now: Instant,
 }
@@ -212,11 +214,54 @@ impl<T, U: Write> Dump<T, U> {
     pub fn new(upstream: T, dump: U) -> Dump<T, U> {
         Dump {
             upstream: upstream,
-            dump: dump,
-            now: Instant::now(),
+            inner: Some(Inner {
+                dump: dump,
+                now: Instant::now(),
+            }),
         }
     }
 
+    /// Create a new `Dump` that passes packets through without logging.
+    pub fn noop(upstream: T) -> Dump<T, U> {
+        Dump {
+            upstream: upstream,
+            inner: None,
+        }
+    }
+}
+
+impl<T: Read, U: Write> Read for Dump<T, U> {
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        let n = try!(self.upstream.read(dst));
+
+        if let Some(inner) = self.inner.as_mut() {
+            try!(inner.write_packet(Direction::Read, &dst[0..n]));
+        }
+
+        Ok(n)
+    }
+}
+
+impl<T: Write, U: Write> Write for Dump<T, U> {
+    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
+        let n = try!(self.upstream.write(src));
+
+        if let Some(inner) = self.inner.as_mut() {
+            try!(inner.write_packet(Direction::Write, &src[0..n]));
+        }
+
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        try!(self.upstream.flush());
+        Ok(())
+    }
+}
+
+// ===== impl Inner =====
+
+impl<U: Write> Inner<U> {
     fn write_packet(&mut self, dir: Direction, data: &[u8]) -> io::Result<()> {
         if dir == Direction::Write {
             try!(write!(self.dump, "<-  "));
@@ -271,30 +316,6 @@ impl<T, U: Write> Dump<T, U> {
         }
 
         write!(self.dump, "\n")
-    }
-}
-
-impl<T: Read, U: Write> Read for Dump<T, U> {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let n = try!(self.upstream.read(dst));
-        try!(self.write_packet(Direction::Read, &dst[0..n]));
-        Ok(n)
-    }
-}
-
-impl<T: Write, U: Write> Write for Dump<T, U> {
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        let n = try!(self.upstream.write(src));
-        try!(self.write_packet(Direction::Write, &src[0..n]));
-
-        trace!("{:?}", &src[0..n]);
-
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        try!(self.upstream.flush());
-        Ok(())
     }
 }
 
